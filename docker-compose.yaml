@@ -40,3 +40,139 @@ services:
       REACT_APP_KEYCLOAK_URL: http://localhost:8080
       REACT_APP_KEYCLOAK_REALM: reports-realm
       REACT_APP_KEYCLOAK_CLIENT_ID: reports-frontend
+
+  crm_db:
+    image: postgres:14
+    environment:
+      POSTGRES_DB: crm_db
+      POSTGRES_USER: crm_user
+      POSTGRES_PASSWORD: crm_password
+    ports:
+      - "5434:5432"
+    volumes:
+      - ./airflow/sql/init_crm.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crm_user -d crm_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  telemetry_db:
+    image: postgres:14
+    environment:
+      POSTGRES_DB: telemetry_db
+      POSTGRES_USER: telemetry_user
+      POSTGRES_PASSWORD: telemetry_password
+    ports:
+      - "5435:5432"
+    volumes:
+      - ./airflow/sql/init_telemetry.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U telemetry_user -d telemetry_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  airflow_db:
+    image: postgres:14
+    environment:
+      POSTGRES_DB: airflow
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+    ports:
+      - "5437:5432"
+    volumes:
+      - ./postgres-airflow-data:/var/lib/postgresql/data
+
+  airflow-init:
+    image: apache/airflow:2.9.1
+    depends_on:
+      - airflow_db
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__SECRET_KEY: "12345678901234567890123456789012"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow_db:5432/airflow
+    entrypoint: ["/bin/bash", "-c"]
+    command: ["airflow db init && airflow users create --username admin --firstname admin --lastname admin --role Admin --email admin@example.com --password admin || true"]
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+
+  airflow-webserver:
+    image: apache/airflow:2.9.1
+    depends_on:
+      - airflow-init
+      - airflow_db
+      - crm_db
+      - telemetry_db
+      - clickhouse
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__SECRET_KEY: "12345678901234567890123456789012"
+      AIRFLOW__WEBSERVER__SECRET_KEY: "12345678901234567890123456789012"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow_db:5432/airflow
+      AIRFLOW_CONN_CRM_DB: postgres://crm_user:crm_password@crm_db:5432/crm_db
+      AIRFLOW_CONN_TELEMETRY_DB: postgres://telemetry_user:telemetry_password@telemetry_db:5432/telemetry_db
+    command: webserver
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+
+  airflow-scheduler:
+    image: apache/airflow:2.9.1
+    depends_on:
+      - airflow-init
+      - airflow_db
+      - crm_db
+      - telemetry_db
+      - clickhouse
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__SECRET_KEY: "12345678901234567890123456789012"
+      AIRFLOW__WEBSERVER__SECRET_KEY: "12345678901234567890123456789012"
+      AIRFLOW__WEBSERVER__BASE_URL: "http://airflow-webserver:8080"
+      AIRFLOW__CORE__EXECUTOR: "SequentialExecutor"
+      AIRFLOW__LOGGING__REMOTE_LOGGING: "False"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow_db:5432/airflow
+      AIRFLOW_CONN_CRM_DB: postgres://crm_user:crm_password@crm_db:5432/crm_db
+      AIRFLOW_CONN_TELEMETRY_DB: postgres://telemetry_user:telemetry_password@telemetry_db:5432/telemetry_db
+    command: scheduler
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    environment:
+      CLICKHOUSE_DB: telemetry
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      KEYCLOAK_ISSUER: http://localhost:8080/realms/reports-realm
+      KEYCLOAK_JWKS_URL: http://keycloak:8080/realms/reports-realm/protocol/openid-connect/certs
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+      CLICKHOUSE_DATABASE: analytics
+    depends_on:
+      - keycloak
+      - clickhouse
+    ports:
+      - "8000:8000"
