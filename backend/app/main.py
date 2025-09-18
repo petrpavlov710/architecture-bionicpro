@@ -260,8 +260,8 @@ def get_clickhouse_raw(
     ]
     params = {
         'email': email_claim,
-        'start_dt': f'{parsed_start.strftime('%Y-%m-%d')} 00:00:00',
-        'end_dt': f'{parsed_end.strftime('%Y-%m-%d')} 23:59:59',
+        'start_dt': f'{parsed_start.strftime("%Y-%m-%d")} 00:00:00',
+        'end_dt': f'{parsed_end.strftime("%Y-%m-%d")} 23:59:59',
     }
     if device_id:
         conditions.append('device_id = {device_id:String}')
