@@ -177,34 +177,13 @@ with DAG(
             FROM postgresql('${PG_TEL_HOST}:${PG_TEL_PORT}','${PG_TEL_DB}','tables','${PG_TEL_USER}','${PG_TEL_PASS}','information_schema')
             WHERE table_schema='${PG_TEL_SCHEMA}' AND table_name='${PG_TEL_TABLE}'"
 
-            run_ch_post "$(cat <<SQL
-            INSERT INTO analytics.fact_daily_telemetry (customer_id, usage_date, steps_sum, avg_battery, load_avg)
-            WITH
-              src AS (
-                SELECT
-                  device_id,
-                  toDate(event_ts) AS usage_date,
-                  sum(steps)         AS steps_sum,
-                  avg(battery_level) AS avg_battery,
-                  avg(load_kg)       AS load_avg
-                FROM postgresql('${PG_TEL_HOST}:${PG_TEL_PORT}','${PG_TEL_DB}','${PG_TEL_TABLE}','${PG_TEL_USER}','${PG_TEL_PASS}','${PG_TEL_SCHEMA}')
-                GROUP BY device_id, usage_date
-              ),
-              dim AS (
-                SELECT device_id, anyHeavy(toInt32(customer_id)) AS customer_id
-                FROM analytics.dim_customers
-                GROUP BY device_id
-              )
-            SELECT
-              d.customer_id,
-              s.usage_date,
-              s.steps_sum,
-              toDecimal32(s.avg_battery, 2),
-              toDecimal32(s.load_avg, 2)
-            FROM src s
-            ANY LEFT JOIN dim d USING device_id
-            SQL
-            )"
+            run_ch_post "INSERT INTO analytics.fact_daily_telemetry (customer_id, usage_date, steps_sum, avg_battery, load_avg)
+            WITH src AS ( SELECT device_id, toDate(event_ts) AS usage_date, sum(steps) AS steps_sum, avg(battery_level) AS avg_battery, avg(load_kg) AS load_avg
+            FROM postgresql('${PG_TEL_HOST}:${PG_TEL_PORT}','${PG_TEL_DB}','${PG_TEL_TABLE}','${PG_TEL_USER}','${PG_TEL_PASS}','${PG_TEL_SCHEMA}')
+            GROUP BY device_id, usage_date ), dim AS ( SELECT device_id, anyHeavy(toInt32(customer_id)) AS customer_id
+            FROM analytics.dim_customers GROUP BY device_id )
+            SELECT d.customer_id, s.usage_date, s.steps_sum, toDecimal32(s.avg_battery, 2), toDecimal32(s.load_avg, 2)
+            FROM src s ANY LEFT JOIN dim d USING device_id"
         """,
         env={},
     )
